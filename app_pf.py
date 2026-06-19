@@ -6,6 +6,7 @@ import geopandas as gpd
 import folium
 import plotly.express as px
 from shapely.geometry import LineString
+import matplotlib.pyplot as plt
 from folium.plugins import MarkerCluster
 from streamlit_folium import folium_static
 import branca.colormap as cm
@@ -17,6 +18,7 @@ st.title("Gestión de activos acueducto municipal de Dota")
 #Carga de datos
 URL_MEDIDORES = "medidores.csv"
 URL_TUBERIAS = "Tuberias.csv"
+URL_VALVULAS = "Valvulas.csv"
 
 @st.cache_data
 def cargar_datos_medidores():
@@ -48,9 +50,21 @@ def cargar_datos_tuberias():
 
     return datos_tuberias
 
+@st.cache_data
+def cargar_datos_valvulas():
+    """Carga los datos de válvulas."""
+    datos_valvulas = pd.read_csv(
+        URL_VALVULAS,
+        sep=";",
+        decimal=","
+    )
+    datos_valvulas.columns = datos_valvulas.columns.str.strip()
+    return datos_valvulas
+
 # ----- Carga de datos -----
 medidores = cargar_datos_medidores()
 tuberias = cargar_datos_tuberias()
+valvulas = cargar_datos_valvulas()
 
 ## Introducción y tabla_____________________________________________________________________________
 
@@ -74,6 +88,12 @@ de un sistema de búsqueda por número de medidor para realizar los cobros, el
 cual se encarga una funcionaria del departamento para realizarlo. El acueducto
 municipal brinda el servicio en el centro de *Santa María, El Jardín y Copey*.
 """)
+
+st.image(
+    "Acueducto.jpg",
+    caption="Referencia del mantenimiento de activos",
+    use_container_width=True
+)
 
 # Filtros interactivos__________________________________________________________________
 #tuberias
@@ -106,6 +126,11 @@ tuberias_filtradas = tuberias[
     (tuberias["Estado"].isin(estado_seleccionado)) &
     (tuberias["Material"].isin(material_seleccionado))
 ].copy()
+
+modo_visualizacion = st.sidebar.radio(
+    "Visualización de tuberías",
+    ["Estado", "Diámetro"]
+)
 
 #Medidores
 
@@ -268,6 +293,53 @@ st.markdown(""" Se observa un dominio del material **PVC** en la infraestructura
 que si se desea cambiar a PEAD, el resultado brinda el total a cambiar y que deberá contemplarse 
 en el presupuesto del próximo año.""")
 
+# Gráfico estadístico: Condición de válvulas________________________________________________
+
+st.subheader("Distribución de válvulas: Condiciones actuales")
+
+st.markdown("""
+El siguiente gráfico muestra la distribución porcentual de las válvulas según
+su condición de cumplimiento normativo y estado operativo.
+""")
+
+# Agrupamiento de válvulas por cumplimiento y estado
+valvulas_agrupadas = valvulas.groupby(["Cumplimiento", "Estado"]).size()
+
+valvulas_agrupadas.index = [
+    "Óptimo",
+    "No conforme/Bueno",
+    "Conforme/Regular"
+]
+
+# Crear figura
+fig, ax = plt.subplots(figsize=(8, 5))
+
+# Crear gráfico circular
+valvulas_agrupadas.plot.pie(
+    ax=ax,
+    autopct="%1.1f%%",
+    startangle=90,
+    colors=["#32B249", "#5839A8", "#B0A93A"]
+)
+
+ax.set_title(
+    "Distribución de válvulas por cumplimiento normativo y estado",
+    fontweight="bold"
+)
+
+ax.set_ylabel("")
+
+# Mostrar en Streamlit
+st.pyplot(fig)
+
+st.markdown("""Se observa que la mayor proporción de válvulas corresponde 
+a aquellas que cumplen con la normativa y se encuentran en buen estado, representando aproximadamente 
+el **45% del total**. Asimismo, existe un grupo importante de válvulas en buen estado que no cumplen 
+con los criterios establecidos, mientras que una menor proporción se encuentra en condición regular y 
+donde se sugiere cambio. Estos resultados sugieren que la infraestructura presenta, 
+en términos generales, una condición favorable, aunque existen oportunidades de mejora relacionadas 
+con el cumplimiento normativo.
+""")
 #____________________________________________________________
 
 # Mapa combinado: medidores y tuberías
@@ -319,19 +391,12 @@ grupo_tuberias = folium.FeatureGroup(name="Tuberías")
 
 for _, row in tuberias_4326.iterrows():
 
-    if row["Estado"] == "Bueno":
-        color = "green"
-    elif row["Estado"] == "Regular":
-        color = "orange"
-    else:
-        color = "red"
-
     popup_tuberia = f"""
     <b>ID tubería:</b> {row['FID']}<br>
     <b>Material:</b> {row['Material']}<br>
     <b>Estado:</b> {row['Estado']}<br>
     <b>Diámetro:</b> {row['Diam_mm']} mm<br>
-    <b>Longitud:</b> {row['Longitud']} m<br>
+    <b>Longitud:</b> {row['Longitud']:.2f} m<br>
     <b>Fecha mantenimiento:</b> {row['Fecha_mant']}<br>
     <b>Fecha instalación:</b> {row['Fecha_inst']}
     """
@@ -340,13 +405,35 @@ for _, row in tuberias_4326.iterrows():
         [lat, lon] for lon, lat in row.geometry.coords
     ]
 
+    # Aplicación del modo de visualización de tuberías
+    if modo_visualizacion == "Estado":
+        if row["Estado"] == "Bueno":
+            color = "green"
+        elif row["Estado"] == "Regular":
+            color = "orange"
+        else:
+            color = "red"
+
+        grosor = 4
+
+    else:
+        if row["Diam_mm"] <= 25:
+            color = "blue"
+            grosor = 3
+        elif row["Diam_mm"] <= 50:
+            color = "purple"
+            grosor = 5
+        else:
+            color = "red"
+            grosor = 7
+
     folium.PolyLine(
         locations=coordenadas,
         color=color,
-        weight=4,
+        weight=grosor,
         opacity=0.8,
         popup=folium.Popup(popup_tuberia, max_width=300),
-        tooltip=f"Tubería {row['FID']} - {row['Material']}"
+        tooltip=f"Tubería {row['FID']} - {row['Diam_mm']} mm"
     ).add_to(grupo_tuberias)
 
 grupo_tuberias.add_to(mapa)
@@ -384,24 +471,44 @@ grupo_medidores.add_to(mapa)
 # Control para activar/desactivar capas
 folium.LayerControl().add_to(mapa)
 
-#Leyenda 
+# Leyenda
+if modo_visualizacion == "Estado":
 
-leyenda_tuberias = cm.StepColormap(
-    colors=["green", "orange"],
-   vmin=0,
-   vmax=2,
-    index=[0, 1, 2],
-    caption="Estado de tuberías: Bueno | Regular "
-)
+    leyenda_tuberias = cm.StepColormap(
+        colors=["green", "orange"],
+        vmin=0,
+        vmax=2,
+        index=[0, 1, 2],
+        caption="Estado de tuberías: Bueno | Regular"
+    )
+
+    leyenda_tuberias.width = 190
+    leyenda_tuberias.height = 40
+
+    # Quitar números de la barra
+    leyenda_tuberias.tick_labels = []
+
+    leyenda_tuberias.add_to(mapa)
+
+else:
+
+    leyenda_tuberias = cm.StepColormap(
+        colors=["blue", "purple", "red"],
+        vmin=0,
+        vmax=3,
+        index=[0, 1, 2, 3],
+        caption="Diámetro:25 mm|50 mm|75 mm"
+    )
+
+    leyenda_tuberias.width = 220
+    leyenda_tuberias.height = 40
+
+    # Quitar números de la barra
+    leyenda_tuberias.tick_labels = []
+
+    leyenda_tuberias.add_to(mapa)
 
 
-leyenda_tuberias.width = 190
-leyenda_tuberias.height = 40
-
-# Quitar números de la barra
-leyenda_tuberias.tick_labels = []
-
-leyenda_tuberias.add_to(mapa)
 
 # Mostrar mapa en Streamlit
 folium_static(mapa, width=900, height=600)   ##tercer entregable##
